@@ -53,10 +53,7 @@ experiment_args = dict(
     perc_prior = 0.5,
     freq_test = 3,
     
-    oversampling = False,
     alpha_mixup = 1.0,
-    perc_oversampling = 1,
-    k_oversampling = 3,
     val_posterior = True,
     self_cert = True,
 )

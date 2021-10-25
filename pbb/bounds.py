@@ -4,8 +4,6 @@ import torch
 import torch.distributions as td
 from tqdm import tqdm, trange
 import torch.nn.functional as F
-import ipdb
-import scipy.optimize as sop
 
 
 class PBBobj():
@@ -102,34 +100,7 @@ class PBBobj():
             kl_ratio = torch.div(
                 kl + np.log((2*np.sqrt(train_size))/self.delta), 2*train_size)
             train_obj = empirical_risk + torch.sqrt(kl_ratio)
-        elif self.objective == 'fpbkl':
-            kl = kl * self.kl_penalty
-            count = 1
-            kl_ratio = torch.div(
-                kl + np.log((2*np.sqrt(train_size))/self.delta), train_size)
-            if empirical_risk == 0:
-                #_, count = inv_kl0(empirical_risk, kl_ratio, self.device)
-                train_obj, count = inv_kl0(
-                    empirical_risk, kl_ratio, self.device, count=count)
-            elif empirical_risk == 1:
-                #_, count = inv_kl1(empirical_risk, kl_ratio, self.device)
-                train_obj, count = inv_kl1(
-                    empirical_risk, kl_ratio, self.device, count=count)
-            else:
-                #_, count = inv_kl(empirical_risk, kl_ratio, self.device)
-                train_obj, count = inv_kl(
-                    empirical_risk, kl_ratio, self.device, count=count)
-            #import ipdb
-            # ipdb.set_trace()
-        elif self.objective == 'fpbkl2':
-            kl = kl * self.kl_penalty
-            kl_ratio = torch.div(
-                kl + np.log((2*np.sqrt(train_size))/self.delta), train_size)
-            train_obj = invert_kl(empirical_risk, kl_ratio, self.device)
-            import ipdb
-            ipdb.set_trace()
         elif self.objective == 'bbb':
-            # ipdb.set_trace()
             train_obj = empirical_risk + \
                 self.kl_penalty * (kl/train_size)
         else:
@@ -191,148 +162,22 @@ class PBBobj():
             error_ce, error_01 = self.mcsampling(net, input, target, batches=False,
                                                  clamping=True)
 
-        empirical_risk_ce = inv_kl_aux(
-            error_ce.item(), np.log(2/self.delta_test)/150000)
-        empirical_risk_01 = inv_kl_aux(
-            error_01, np.log(2/self.delta_test)/150000)
-
-        # TODO: changed to get a good idea of what bound could look like with adequate mc sampling, change back eventually!
-        # empirical_risk_ce = inv_kl(
-        #     error_ce.item(), np.log(2/self.delta_test)/self.mc_samples)
-        # empirical_risk_01 = inv_kl(
-        #     error_01, np.log(2/self.delta_test)/self.mc_samples)
+        empirical_risk_ce = inv_kl(
+            error_ce.item(), np.log(2/self.delta_test)/self.mc_samples)
+        empirical_risk_01 = inv_kl(
+            error_01, np.log(2/self.delta_test)/self.mc_samples)
 
         train_obj = self.bound(empirical_risk_ce, kl,
                                self.n_posterior, lambda_var)
 
-        risk_ce = inv_kl_aux(empirical_risk_ce, (kl + np.log((2 *
-                                                             np.sqrt(self.n_bound))/self.delta))/self.n_bound)
-        risk_01 = inv_kl_aux(empirical_risk_01, (kl + np.log((2 *
-                                                             np.sqrt(self.n_bound))/self.delta))/self.n_bound)
+        risk_ce = inv_kl(empirical_risk_ce, (kl + np.log((2 *
+                                                          np.sqrt(self.n_bound))/self.delta))/self.n_bound)
+        risk_01 = inv_kl(empirical_risk_01, (kl + np.log((2 *
+                                                          np.sqrt(self.n_bound))/self.delta))/self.n_bound)
         return train_obj, kl/self.n_bound, empirical_risk_ce, empirical_risk_01, risk_ce, risk_01
 
 
-def inv_kl0(qs, ks, device, count=None):
-    """Inversion of the binary kl
-
-    Parameters
-    ----------
-    qs : float
-        Empirical risk
-
-    ks : float
-        second term for the binary kl inversion
-
-    """
-    # computation of the inversion of the binary KL
-    ikl = torch.tensor(0, dtype=torch.float64,
-                       device=device, requires_grad=True)
-    izq = qs
-    dch = torch.tensor(1-1e-10, dtype=torch.float64,
-                       device=device, requires_grad=True)
-    p = torch.tensor(0, dtype=torch.float64,
-                     device=device, requires_grad=True)
-
-    if count:
-        # while((dch-izq)/dch >= 1e-5):
-        for it in range(count):
-            p = (izq+dch)*.5
-            ikl = ks-(0+(1-qs)*torch.log(torch.div((1-qs), (1-p))))
-            dch = (ikl < 0) * p + (ikl >= 0) * dch
-            izq = (ikl < 0) * izq + (ikl >= 0) * p
-    else:
-        count = 0
-        while((dch-izq)/dch >= 1e-5):
-            p = (izq+dch)*.5
-            ikl = ks-(0+(1-qs)*torch.log(torch.div((1-qs), (1-p))))
-            dch = (ikl < 0) * p + (ikl >= 0) * dch
-            izq = (ikl < 0) * izq + (ikl >= 0) * p
-            count += 1
-
-    return p, count
-
-
-def inv_kl1(qs, ks, device, count=None):
-    """Inversion of the binary kl
-
-    Parameters
-    ----------
-    qs : float
-        Empirical risk
-
-    ks : float
-        second term for the binary kl inversion
-
-    """
-    # computation of the inversion of the binary KL
-    ikl = torch.tensor(0, dtype=torch.float64,
-                       device=device, requires_grad=True)
-    izq = qs
-    dch = torch.tensor(1-1e-10, dtype=torch.float64,
-                       device=device, requires_grad=True)
-    p = torch.tensor(0, dtype=torch.float64,
-                     device=device, requires_grad=True)
-
-    if count:
-        for it in range(count):
-            p = (izq+dch)*.5
-            ikl = ks-(qs*torch.log(torch.div(qs, p))+0)
-            dch = (ikl < 0) * p + (ikl >= 0) * dch
-            izq = (ikl < 0) * izq + (ikl >= 0) * p
-    else:
-        count = 0
-        while((dch-izq)/dch >= 1e-5):
-            p = (izq+dch)*.5
-            ikl = ks-(qs*torch.log(torch.div(qs, p))+0)
-            dch = (ikl < 0) * p + (ikl >= 0) * dch
-            izq = (ikl < 0) * izq + (ikl >= 0) * p
-            count += 1
-
-    return p, count
-
-
-def inv_kl(qs, ks, device, count=None):
-    """Inversion of the binary kl
-
-    Parameters
-    ----------
-    qs : float
-        Empirical risk
-
-    ks : float
-        second term for the binary kl inversion
-
-    """
-    # computation of the inversion of the binary KL
-    ikl = torch.tensor(0, dtype=torch.float64,
-                       device=device, requires_grad=True)
-    izq = qs
-    dch = torch.tensor(1-1e-10, dtype=torch.float64,
-                       device=device, requires_grad=True)
-    p = torch.tensor(0, dtype=torch.float64,
-                     device=device, requires_grad=True)
-
-    if count:
-        for it in range(count):
-            p = (izq+dch)*.5
-            ikl = ks-(qs*torch.log(torch.div(qs, p))+(1-qs)
-                      * torch.log(torch.div((1-qs), (1-p))))
-            dch = (ikl < 0) * p + (ikl >= 0) * dch
-            izq = (ikl < 0) * izq + (ikl >= 0) * p
-    else:
-        count = 0
-        while((dch-izq)/dch >= 1e-5):
-            p = (izq+dch)*.5
-            ikl = ks-(qs*torch.log(torch.div(qs, p))+(1-qs)
-                      * torch.log(torch.div((1-qs), (1-p))))
-            dch = (ikl < 0) * p + (ikl >= 0) * dch
-            izq = (ikl < 0) * izq + (ikl >= 0) * p
-            count += 1
-
-    return p, count
-
-
-def inv_kl_aux(qs, ks):
+def inv_kl(qs, ks):
     """Inversion of the binary kl
 
     Parameters
@@ -361,24 +206,3 @@ def inv_kl_aux(qs, ks):
         else:
             izq = p
     return p
-
-
-def kl_bernoullis(a, b, device):
-    """compute KL divergence between two Bernoullis"""
-    t = torch.tensor(0, dtype=torch.float64,
-                     device=device, requires_grad=False)
-    if b == 1 or b == 0:
-        return torch.tensor(10000000000000, dtype=torch.float64,
-                            device=device, requires_grad=False)
-    if a == 0:
-        return torch.log(1.0/(1-b))
-    if a == 1:
-        return torch.log(1.0/b)
-    t = a * torch.log(a / b)
-    t += (1-a) * torch.log((1-a) / (1-b))
-    return t
-
-
-def invert_kl(qhat, KL, device):
-    return torch.tensor(sop.brentq(lambda x: kl_bernoullis(qhat, x, device)-KL, a=qhat+1E-10, b=1.0, maxiter=100, full_output=False, disp=True), dtype=torch.float64,
-                        device=device, requires_grad=False)
